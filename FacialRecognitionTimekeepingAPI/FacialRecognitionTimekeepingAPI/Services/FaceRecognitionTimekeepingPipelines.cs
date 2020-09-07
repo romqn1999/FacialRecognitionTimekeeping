@@ -1,9 +1,12 @@
-﻿using System;
+﻿using FacialRecognitionTimekeepingAPI.Helper;
+using FacialRecognitionTimekeepingAPI.Models;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -51,32 +54,40 @@ namespace FacialRecognitionTimekeepingAPI.Services
 
         public static async Task<string> DetectFace(Models.RegisterInputModel registerInputModel)
         {
+            if (registerInputModel.FormFile == default)
+            {
+                return "No file attached";
+            }
             var client = new HttpClient();
             var queryString = HttpUtility.ParseQueryString(string.Empty);
 
             // Request headers
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "{subscription key}");
+            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "cebed4f82c1b48fda770abebd5f38ee7");
 
             // Request parameters
             queryString["returnFaceId"] = "true";
-            queryString["returnFaceLandmarks"] = "false";
-            queryString["returnFaceAttributes"] = "{string}";
-            queryString["recognitionModel"] = "recognition_01";
-            queryString["returnRecognitionModel"] = "false";
-            queryString["detectionModel"] = "detection_01";
-            var uri = "https://westus.api.cognitive.microsoft.com/face/v1.0/detect?" + queryString;
+            //queryString["returnFaceLandmarks"] = "true";
+            //queryString["returnFaceAttributes"] = "{string}";
+            queryString["recognitionModel"] = "recognition_03";
+            queryString["returnRecognitionModel"] = "true";
+            queryString["detectionModel"] = "detection_02";
+            var uri = "https://thinh.cognitiveservices.azure.com/face/v1.0/detect?" + queryString;
 
             HttpResponseMessage response;
 
             // Request body
-            byte[] byteData = Encoding.UTF8.GetBytes("{body}");
+            byte[] byteData = await registerInputModel.FormFile?.GetBytesAsync();
 
             using (var content = new ByteArrayContent(byteData))
             {
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                 response = await client.PostAsync(uri, content);
             }
-            return await response.Content.ReadAsStringAsync();
+            string responseStr = await response.Content.ReadAsStringAsync();
+            var listFaces = JsonSerializer.Deserialize<List<Face>>(responseStr);
+            return JsonSerializer.Serialize(
+                listFaces.FirstOrDefault(
+                    f => f.FaceRectangle.Width >= listFaces.Max(f => f.FaceRectangle.Width)));
         }
 
         public static async Task<string> RegisterFace(Task<string> input)
