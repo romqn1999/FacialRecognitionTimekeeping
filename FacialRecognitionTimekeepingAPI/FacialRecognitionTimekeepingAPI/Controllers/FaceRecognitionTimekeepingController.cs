@@ -43,7 +43,10 @@ namespace FacialRecognitionTimekeepingAPI.Controllers
         [HttpGet("{aliasId}")]
         public ActionResult<object> Get(string aliasId)
         {
-            return _timekeepingContext.TimekeepingRecords.Where(r => r.AliasId == aliasId).OrderByDescending(r => r.TimekeepingRecordUnixTimestampSeconds).ToList();
+            return _timekeepingContext.TimekeepingRecords
+                .Where(r => r.AliasId == aliasId)
+                .OrderByDescending(r => r.TimekeepingRecordUnixTimestampSeconds)
+                .ToList();
         }
 
         // POST api/<FaceRecognitionTimekeepingController>
@@ -97,10 +100,10 @@ namespace FacialRecognitionTimekeepingAPI.Controllers
         [HttpDelete("{aliasId}")]
         public async Task<string> Delete(string aliasId)
         {
-            Models.DeletePipelineModel input = new Models.DeletePipelineModel { AliasId = aliasId };
-            _logger.LogInformation(input.AliasId);
-            input.TimekeepingContext = _timekeepingContext;
-            Models.DeletePipelineModel pipelineModel = await _pipelines.DeletePersonPipeline.Execute(input).Result;
+            Models.DeletePipelineModel pipelineModel = new Models.DeletePipelineModel { AliasId = aliasId };
+            _logger.LogInformation(pipelineModel.AliasId);
+            pipelineModel.TimekeepingContext = _timekeepingContext;
+            pipelineModel = await _pipelines.DeletePersonPipeline.Execute(pipelineModel).Result;
             if (pipelineModel.HasError)
             {
                 return pipelineModel.Message;

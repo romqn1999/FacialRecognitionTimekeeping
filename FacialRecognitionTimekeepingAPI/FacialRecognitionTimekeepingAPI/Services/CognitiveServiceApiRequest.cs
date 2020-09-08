@@ -32,7 +32,7 @@ namespace FacialRecognitionTimekeepingAPI.Services
             //queryString["returnFaceAttributes"] = "{string}";
             queryString["recognitionModel"] = "recognition_03";
             queryString["returnRecognitionModel"] = "true";
-            queryString["detectionModel"] = "detection_02";
+            queryString["detectionModel"] = "detection_01";
             var uri = $"{CognitiveEndpoint}/face/v1.0/detect?" + queryString;
 
             HttpResponseMessage response;
