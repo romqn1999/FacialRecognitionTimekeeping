@@ -1,5 +1,6 @@
 ﻿using FacialRecognitionTimekeepingAPI.Helper;
 using FacialRecognitionTimekeepingAPI.Models;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,11 +10,21 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
+using System.Web.Mvc;
 
 namespace FacialRecognitionTimekeepingAPI.Services
 {
     public class FaceRecognitionTimekeepingPipelines
     {
+        private TimekeepingContext _timekeepingContext;
+
+        public static ILogger Logger { get; set; }
+
+        public FaceRecognitionTimekeepingPipelines(TimekeepingContext timekeepingContext)
+        {
+            _timekeepingContext = timekeepingContext;
+        }
+
         public BlockingCollectionPipelineAwaitable<string, bool> TestPipeline { get; private set; } =
             new BlockingCollectionPipelineAwaitable<string, bool>((builder) =>
                 //inputFirst.AddStep(builder, input => FindMostCommon(input))
@@ -24,21 +35,26 @@ namespace FacialRecognitionTimekeepingAPI.Services
                     .AddStep<int, bool>(input => input % 2 == 1)
             );
 
-        public BlockingCollectionPipelineAwaitable<Models.RegisterInputModel, Task<string>> RegisterPersonPipeline { get; private set; } =
-            new BlockingCollectionPipelineAwaitable<Models.RegisterInputModel, Task<string>>((builder) =>
-                builder.AddStep<Models.RegisterInputModel, Task<string>>(DetectFace)
-                    .AddStep<Task<string>, Task<string>>(RegisterFace)
+        public BlockingCollectionPipelineAwaitable<Models.RegisterPipelineModel, Task<RegisterPipelineModel>> RegisterPersonPipeline { get; private set; } =
+            new BlockingCollectionPipelineAwaitable<Models.RegisterPipelineModel, Task<RegisterPipelineModel>>((builder) =>
+                builder.AddStep<Models.RegisterPipelineModel, Task<RegisterPipelineModel>>(CreateCognitivePerson)
+                    .AddStep<Task<RegisterPipelineModel>, Task<RegisterPipelineModel>>(DetectBiggestFace)
+                    .AddStep<Task<RegisterPipelineModel>, Task<RegisterPipelineModel>>(AddFaceCognitivePerson)
+                    .AddStep<Task<RegisterPipelineModel>, Task<RegisterPipelineModel>>(CreateTimekeepingPerson)
+                    .AddStep<Task<RegisterPipelineModel>, Task<RegisterPipelineModel>>(TrainCognitivePersonGroup)
             );
 
-        public BlockingCollectionPipelineAwaitable<Models.TimekeepingInputModel, string> TimekeepingPipeline { get; private set; } =
-            new BlockingCollectionPipelineAwaitable<Models.TimekeepingInputModel, string>((builder) =>
-                builder.AddStep<Models.TimekeepingInputModel, Task<string>>(RecognizeFace)
-                    .AddStep<Task<string>, string>(Timekeeping)
+        public BlockingCollectionPipelineAwaitable<RecognizeTimekeepingPipelineModels, Task<RecognizeTimekeepingPipelineModels>> TimekeepingPipeline { get; private set; } =
+            new BlockingCollectionPipelineAwaitable<RecognizeTimekeepingPipelineModels, Task<RecognizeTimekeepingPipelineModels>>((builder) =>
+                builder.AddStep<RecognizeTimekeepingPipelineModels, Task<RecognizeTimekeepingPipelineModels>>(DetectMultipleFaces)
+                    .AddStep<Task<RecognizeTimekeepingPipelineModels>, Task<RecognizeTimekeepingPipelineModels>>(RecognizeFaces)
+                    .AddStep<Task<RecognizeTimekeepingPipelineModels>, Task<RecognizeTimekeepingPipelineModels>>(Timekeeping)
             );
 
-        public BlockingCollectionPipelineAwaitable<string, Task<string>> DeletePersonPipeline { get; private set; } =
-            new BlockingCollectionPipelineAwaitable<string, Task<string>>((builder) =>
-                builder.AddStep<string, Task<string>>(DeleteFace)
+        public BlockingCollectionPipelineAwaitable<DeletePipelineModel, Task<DeletePipelineModel>> DeletePersonPipeline { get; private set; } =
+            new BlockingCollectionPipelineAwaitable<DeletePipelineModel, Task<DeletePipelineModel>>((builder) =>
+                builder.AddStep<DeletePipelineModel, Task<DeletePipelineModel>>(DeleteTimekeeping)
+                    .AddStep<Task<DeletePipelineModel>, Task<DeletePipelineModel>>(DeleteCognitive)
             );
 
         private static string FindMostCommon(string input)
@@ -52,108 +68,301 @@ namespace FacialRecognitionTimekeepingAPI.Services
                 .Key;
         }
 
-        public static async Task<string> DetectFace(Models.RegisterInputModel registerInputModel)
+        public static async Task<RegisterPipelineModel> DetectBiggestFace(Task<Models.RegisterPipelineModel> inputPipelineModel)
         {
-            if (registerInputModel.FormFile == default)
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
             {
-                return "No file attached";
+                return pipelineModel;
             }
-            var client = new HttpClient();
-            var queryString = HttpUtility.ParseQueryString(string.Empty);
 
-            // Request headers
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "cebed4f82c1b48fda770abebd5f38ee7");
+            var response = await CognitiveServiceApiRequest.DetectFaces(await pipelineModel.FormFile?.GetBytesAsync());
 
-            // Request parameters
-            queryString["returnFaceId"] = "true";
-            //queryString["returnFaceLandmarks"] = "true";
-            //queryString["returnFaceAttributes"] = "{string}";
-            queryString["recognitionModel"] = "recognition_03";
-            queryString["returnRecognitionModel"] = "true";
-            queryString["detectionModel"] = "detection_02";
-            var uri = "https://thinh.cognitiveservices.azure.com/face/v1.0/detect?" + queryString;
-
-            HttpResponseMessage response;
-
-            // Request body
-            byte[] byteData = await registerInputModel.FormFile?.GetBytesAsync();
-
-            using (var content = new ByteArrayContent(byteData))
-            {
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                response = await client.PostAsync(uri, content);
-            }
             string responseStr = await response.Content.ReadAsStringAsync();
-            var listFaces = JsonSerializer.Deserialize<List<Face>>(responseStr);
-            return JsonSerializer.Serialize(
-                listFaces.FirstOrDefault(
-                    f => f.FaceRectangle.Width >= listFaces.Max(f => f.FaceRectangle.Width)));
-        }
 
-        public static async Task<string> RegisterFace(Task<string> input)
-        {
-            var client = new HttpClient();
-            var queryString = HttpUtility.ParseQueryString(string.Empty);
-
-            // Request headers
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "{subscription key}");
-
-            var uri = "https://westus.api.cognitive.microsoft.com/face/v1.0/persongroups/{personGroupId}/persons?" + queryString;
-
-            HttpResponseMessage response;
-
-            // Request body
-            byte[] byteData = Encoding.UTF8.GetBytes("{body}");
-
-            using (var content = new ByteArrayContent(byteData))
+            if (response.IsSuccessStatusCode)
             {
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                response = await client.PostAsync(uri, content);
+                var listFaces = JsonSerializer.Deserialize<List<Face>>(responseStr);
+                pipelineModel.BiggestFace = listFaces?.FirstOrDefault(
+                        f => f.FaceRectangle.Width >= listFaces.Max(f => f.FaceRectangle.Width));
+                if (pipelineModel.BiggestFace == default)
+                {
+                    pipelineModel.SetError("Face not found");
+                }
             }
-            return input.Result + Environment.NewLine + await response.Content.ReadAsStringAsync();
-        }
-
-        public static async Task<string> RecognizeFace(Models.TimekeepingInputModel input)
-        {
-            var client = new HttpClient();
-            var queryString = HttpUtility.ParseQueryString(string.Empty);
-
-            // Request headers
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "{subscription key}");
-
-            var uri = "https://westus.api.cognitive.microsoft.com/face/v1.0/identify?" + queryString;
-
-            HttpResponseMessage response;
-
-            // Request body
-            byte[] byteData = Encoding.UTF8.GetBytes("{body}");
-
-            using (var content = new ByteArrayContent(byteData))
+            else
             {
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                response = await client.PostAsync(uri, content);
+                pipelineModel.SetError(responseStr);
             }
 
-            return await response.Content.ReadAsStringAsync();
+            return pipelineModel;
         }
 
-        public static async Task<string> DeleteFace(string input)
+        public static async Task<RegisterPipelineModel> CreateCognitivePerson(RegisterPipelineModel input)
         {
-            var client = new HttpClient();
-            var queryString = HttpUtility.ParseQueryString(string.Empty);
+            var pipelineModel = input;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
 
-            // Request headers
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", "{subscription key}");
+            if (pipelineModel.FormFile == default)
+            {
+                pipelineModel.SetError("No file attached");
+                return pipelineModel;
+            }
 
-            var uri = "https://westus.api.cognitive.microsoft.com/face/v1.0/persongroups/{personGroupId}/persons/{personId}?" + queryString;
+            if (pipelineModel.TimekeepingContext.TimekeepingPeople.Find(pipelineModel.AliasId) != null)
+            {
+                pipelineModel.SetError("Alias id already exists");
+                return pipelineModel;
+            }
 
-            var response = await client.DeleteAsync(uri);
-            return await response.Content.ReadAsStringAsync();
+            var response = await CognitiveServiceApiRequest.CreateCognitivePerson(pipelineModel.AliasId);
+
+            string responseStr = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                pipelineModel.PersonInfo = JsonSerializer.Deserialize<PersonInfo>(responseStr);
+            }
+            else
+            {
+                pipelineModel.SetError(responseStr);
+            }
+
+            return pipelineModel;
         }
 
-        public static string Timekeeping(Task<string> input)
+        public static async Task<RegisterPipelineModel> AddFaceCognitivePerson(Task<RegisterPipelineModel> inputPipelineModel)
         {
-            return "dacrom";
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            var response = await CognitiveServiceApiRequest.AddFaceCognitivePerson(pipelineModel.PersonInfo.PersonId, await pipelineModel.FormFile?.GetBytesAsync(), pipelineModel.BiggestFace);
+
+            string responseStr = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                pipelineModel.BiggestFace.PersistedFaceId = JsonDocument.Parse(responseStr).RootElement.GetProperty("persistedFaceId").GetString();
+            }
+            else
+            {
+                pipelineModel.SetError(responseStr);
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<RegisterPipelineModel> CreateTimekeepingPerson(Task<RegisterPipelineModel> inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                //if (!string.IsNullOrEmpty(pipelineModel?.PersonInfo?.PersonId))
+                //{
+                //    await CognitiveServiceApiRequest.DeleteCognitivePerson(pipelineModel.PersonInfo.PersonId);
+                //}
+                return pipelineModel;
+            }
+
+            pipelineModel.TimekeepingPerson = new TimekeepingPerson { AliasId = pipelineModel.AliasId, CognitivePersonId = pipelineModel.PersonInfo.PersonId };
+
+            try
+            {
+                pipelineModel.TimekeepingContext.TimekeepingPeople.Add(pipelineModel.TimekeepingPerson);
+                await pipelineModel.TimekeepingContext.SaveChangesAsync();
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e, e.Message);
+                pipelineModel.SetError(e.Message);
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<RegisterPipelineModel> TrainCognitivePersonGroup(Task<RegisterPipelineModel> inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                if (!string.IsNullOrEmpty(pipelineModel?.PersonInfo?.PersonId))
+                {
+                    await CognitiveServiceApiRequest.DeleteCognitivePerson(pipelineModel.PersonInfo.PersonId);
+                }
+                return pipelineModel;
+            }
+
+            HttpResponseMessage response;
+            string trainingStatus = null;
+
+            response = await CognitiveServiceApiRequest.TrainCognitivePersonGroup();
+            await Task.Run(async () =>
+            {
+                do
+                {
+                    await Task.Delay(1000);
+                    response = await CognitiveServiceApiRequest.GetTrainingCognitivePersonGroupStatus();
+                    if (response.IsSuccessStatusCode)
+                    {
+                        string responseStr = await response.Content.ReadAsStringAsync();
+                        //trainingStatusResponse = JsonSerializer.Deserialize(responseStr, trainingStatusResponse.GetType());
+                        trainingStatus = JsonDocument.Parse(responseStr).RootElement.GetProperty("status").GetString();
+                    }
+                    else
+                    {
+                        trainingStatus = "failed";
+                    }
+                }
+                while (trainingStatus == "running");
+            });
+
+            return pipelineModel;
+        }
+
+        public static async Task<RecognizeTimekeepingPipelineModels> DetectMultipleFaces(RecognizeTimekeepingPipelineModels inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            var response = await CognitiveServiceApiRequest.DetectFaces(await pipelineModel.FormFile?.GetBytesAsync());
+
+            string responseStr = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                pipelineModel.Faces = JsonSerializer.Deserialize<List<Face>>(responseStr);
+                if (pipelineModel.Faces?.Count <= 0)
+                {
+                    pipelineModel.SetError("No face detected");
+                }
+            }
+            else
+            {
+                pipelineModel.SetError(responseStr);
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<RecognizeTimekeepingPipelineModels> RecognizeFaces(Task<RecognizeTimekeepingPipelineModels> inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            var response = await CognitiveServiceApiRequest.IdentifyFaces(pipelineModel.Faces.Select(f => f.FaceId).ToList());
+
+            string responseStr = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                pipelineModel.IdentifyPeopleRespone = JsonSerializer.Deserialize<List<IdentifyPersonRespone>>(responseStr);
+                pipelineModel.TimekeepingPeople = new List<TimekeepingPerson>();
+                foreach (var identifiedPerson in pipelineModel.IdentifyPeopleRespone)
+                {
+                    string identifiedPersonId = identifiedPerson.Candidates?.FirstOrDefault()?.PersonId;
+                    var timekeepingPerson = pipelineModel.TimekeepingContext.TimekeepingPeople.FirstOrDefault(p => (p.CognitivePersonId == identifiedPersonId));
+                    if (timekeepingPerson != null)
+                    {
+                        pipelineModel.TimekeepingPeople.Add(timekeepingPerson);
+                    }
+                }
+            }
+            else
+            {
+                pipelineModel.SetError(responseStr);
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<RecognizeTimekeepingPipelineModels> Timekeeping(Task<RecognizeTimekeepingPipelineModels> inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            foreach (var timekeepingPerson in pipelineModel.TimekeepingPeople)
+            {
+                try
+                {
+                    pipelineModel.TimekeepingContext.TimekeepingRecords.Add(
+                        new TimekeepingRecord
+                        {
+                            AliasId = timekeepingPerson.AliasId,
+                            TimekeepingRecordUnixTimestampSeconds = DateTimeOffset.Now.ToUnixTimeSeconds()
+                        });
+                    await pipelineModel.TimekeepingContext.SaveChangesAsync();
+                }
+                catch (Exception e)
+                {
+                    Logger.LogError(e, e.Message);
+                    pipelineModel.SetError(e.Message);
+                }
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<DeletePipelineModel> DeleteTimekeeping(DeletePipelineModel inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            try
+            {
+                pipelineModel.TimekeepingPerson = await pipelineModel.TimekeepingContext.TimekeepingPeople.FindAsync(pipelineModel.AliasId);
+                if (pipelineModel.TimekeepingPerson == null)
+                {
+                    pipelineModel.SetError("Not found");
+                    return pipelineModel;
+                }
+                pipelineModel.TimekeepingContext.TimekeepingPeople.Remove(pipelineModel.TimekeepingPerson);
+                await pipelineModel.TimekeepingContext.SaveChangesAsync();
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e, e.Message);
+                pipelineModel.SetError(e.Message);
+            }
+
+            return pipelineModel;
+        }
+
+        public static async Task<DeletePipelineModel> DeleteCognitive(Task<DeletePipelineModel> inputPipelineModel)
+        {
+            var pipelineModel = inputPipelineModel.Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel;
+            }
+
+            var response = await CognitiveServiceApiRequest.DeleteCognitivePerson(pipelineModel.TimekeepingPerson.CognitivePersonId);
+
+            string responseStr = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                pipelineModel.SetError(responseStr);
+            }
+
+            return pipelineModel;
         }
     }
 }

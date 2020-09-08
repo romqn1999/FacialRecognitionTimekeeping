@@ -1,0 +1,55 @@
+version: '3.5'
+
+networks:
+  localdev:
+    name: localdev
+    
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2019-CU3-ubuntu-18.04
+    container_name: db-sqlserver-timekeeping
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "Dacrom123"
+    # user setting for run on linux machine, not use for windows host
+    # user: ${CURRENT_UID:?"Please run as follows 'CURRENT_UID=$(id -u):$(id -g) docker-compose up'"}
+    volumes:
+      # # setting for linux server
+      # - "/mnt/data/dacle/timekeeping/docker-volumes/mssql/data:/var/opt/mssql/data"
+      # - "/mnt/data/dacle/timekeeping/docker-volumes/mssql/log:/var/opt/mssql/log"
+      # - "/mnt/data/dacle/timekeeping/docker-volumes/mssql/secrets:/var/opt/mssql/secrets"
+      # setting for local test/develop
+      - "./docker-volumes/mssql/data:/var/opt/mssql/data"
+      - "./docker-volumes/mssql/log:/var/opt/mssql/log"
+      - "./docker-volumes/mssql/secrets:/var/opt/mssql/secrets"
+    networks:
+      - localdev
+
+  main-api:
+    container_name: timekeeping-api-server
+    build:
+      context: .
+      dockerfile: FacialRecognitionTimekeepingAPI/Dockerfile
+    restart: always
+    ports:
+      - "8000:80"
+      - "8001:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=https://+:443;http://+:80
+      - ASPNETCORE_Kestrel__Certificates__Default__Password=dacrom
+      - ASPNETCORE_Kestrel__Certificates__Default__Path=/https/aspnetapp.pfx
+    depends_on:
+      - db
+    volumes:
+      - ./.aspnet/https:/https:ro
+      # setting for linux server
+      # - "/mnt/data/dacle/timekeeping/docker-volumes/data:/data"
+      # - "/mnt/data/dacle/timekeeping/docker-volumes/data/app/resources:/app/resources"
+      # setting for local test/develop
+      - "./docker-volumes/data:/data"
+      - "./docker-volumes/data/app/resources:/app/resources"
+    networks:
+      - localdev

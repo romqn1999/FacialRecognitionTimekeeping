@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpsPolicy;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -38,6 +39,9 @@ namespace FacialRecognitionTimekeepingAPI
             );
 
             services.AddSingleton<Services.FaceRecognitionTimekeepingPipelines>();
+
+            //services.AddDbContext<TimekeepingContext>(opt => opt.UseInMemoryDatabase("Timekeepings").EnableSensitiveDataLogging(), ServiceLifetime.Singleton);
+            services.AddDbContext<TimekeepingContext>(opt => opt.UseSqlServer(Configuration.GetConnectionString("TimekeepingContext")).EnableSensitiveDataLogging(), ServiceLifetime.Singleton);
 
             services.AddControllers();
         }
@@ -71,6 +75,16 @@ namespace FacialRecognitionTimekeepingAPI
             {
                 endpoints.MapControllers();
             });
+
+            using (var serviceScope = app.ApplicationServices.GetService<IServiceScopeFactory>().CreateScope())
+            {
+                var timekeepingContext = serviceScope.ServiceProvider.GetRequiredService<TimekeepingContext>();
+                timekeepingContext.Database.Migrate();
+                timekeepingContext.Database.EnsureCreated();
+            }
+
+            FaceRecognitionTimekeepingPipelines.Logger = app.ApplicationServices.GetService<ILogger<FaceRecognitionTimekeepingPipelines>>();
+            CognitiveServiceApiRequest.Logger = app.ApplicationServices.GetService<ILogger<CognitiveServiceApiRequest>>();
         }
     }
 }

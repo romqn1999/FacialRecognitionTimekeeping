@@ -15,32 +15,35 @@ namespace FacialRecognitionTimekeepingAPI.Controllers
     {
         private readonly Services.FaceRecognitionTimekeepingPipelines _pipelines;
         private readonly ILogger<FaceRecognitionTimekeepingController> _logger;
+        private readonly Services.TimekeepingContext _timekeepingContext;
 
         public FaceRecognitionTimekeepingController(
             Services.FaceRecognitionTimekeepingPipelines pipelines,
-            ILogger<FaceRecognitionTimekeepingController> logger)
+            ILogger<FaceRecognitionTimekeepingController> logger,
+            Services.TimekeepingContext timekeepingContext)
         {
             _pipelines = pipelines;
             _logger = logger;
+            _timekeepingContext = timekeepingContext;
 
             Task.Run(async () => _logger.LogInformation((await _pipelines.TestPipeline.Execute("dacrom test")).ToString()));
         }
 
         // GET: api/<FaceRecognitionTimekeepingController>
         [HttpGet]
-        public async Task<IEnumerable<bool>> Get()
+        public ActionResult<object> GetByQuery([FromQuery(Name = "aliasId")]string aliasId)
         {
-            return new bool[] {
-                await _pipelines.TestPipeline.Execute("dacrom1"),
-                await _pipelines.TestPipeline.Execute("test")
-            };
+            return _timekeepingContext.TimekeepingRecords
+                .Where(r => string.IsNullOrEmpty(aliasId) ? true : r.AliasId == aliasId)
+                .OrderByDescending(r => r.TimekeepingRecordUnixTimestampSeconds)
+                .ToList();
         }
 
         // GET api/<FaceRecognitionTimekeepingController>/5
-        [HttpGet("{strInput}")]
-        public async Task<bool> Get(string strInput)
+        [HttpGet("{aliasId}")]
+        public ActionResult<object> Get(string aliasId)
         {
-            return await _pipelines.TestPipeline.Execute(strInput);
+            return _timekeepingContext.TimekeepingRecords.Where(r => r.AliasId == aliasId).OrderByDescending(r => r.TimekeepingRecordUnixTimestampSeconds).ToList();
         }
 
         // POST api/<FaceRecognitionTimekeepingController>
@@ -51,19 +54,37 @@ namespace FacialRecognitionTimekeepingAPI.Controllers
 
         // POST api/FaceRecognitionTimekeeping/register
         [HttpPost("register")]
-        public async Task<string> Register([FromForm] Models.RegisterInputModel input)
+        public async Task<ActionResult<object>> Register([FromForm] Models.RegisterPipelineModel input)
         {
             _logger.LogInformation(input.AliasId);
             _logger.LogInformation(input.FormFile?.FileName);
-            return await _pipelines.RegisterPersonPipeline.Execute(input).Result;
+            input.TimekeepingContext = _timekeepingContext;
+            Models.RegisterPipelineModel pipelineModel = await _pipelines.RegisterPersonPipeline.Execute(input).Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel.Message;
+            }
+            else
+            {
+                return pipelineModel.TimekeepingPerson;
+            }
         }
 
         // POST api/FaceRecognitionTimekeeping/timekeeping
         [HttpPost("timekeeping")]
-        public async Task<string> Timekeeping()
+        public async Task<ActionResult<object>> Timekeeping([FromForm] Models.RecognizeTimekeepingPipelineModels input)
         {
-            var input = new Models.TimekeepingInputModel();
-            return await _pipelines.TimekeepingPipeline.Execute(input);
+            _logger.LogInformation(input.FormFile?.FileName);
+            input.TimekeepingContext = _timekeepingContext;
+            Models.RecognizeTimekeepingPipelineModels pipelineModel = await _pipelines.TimekeepingPipeline.Execute(input).Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel.Message;
+            }
+            else
+            {
+                return pipelineModel.TimekeepingPeople;
+            }
         }
 
         // PUT api/<FaceRecognitionTimekeepingController>/5
@@ -73,10 +94,21 @@ namespace FacialRecognitionTimekeepingAPI.Controllers
         }
 
         // DELETE api/<FaceRecognitionTimekeepingController>/5
-        [HttpDelete("{id}")]
-        public async Task<string> Delete(string id)
+        [HttpDelete("{aliasId}")]
+        public async Task<string> Delete(string aliasId)
         {
-            return await _pipelines.DeletePersonPipeline.Execute(id).Result;
+            Models.DeletePipelineModel input = new Models.DeletePipelineModel { AliasId = aliasId };
+            _logger.LogInformation(input.AliasId);
+            input.TimekeepingContext = _timekeepingContext;
+            Models.DeletePipelineModel pipelineModel = await _pipelines.DeletePersonPipeline.Execute(input).Result;
+            if (pipelineModel.HasError)
+            {
+                return pipelineModel.Message;
+            }
+            else
+            {
+                return null;
+            }
         }
     }
 }

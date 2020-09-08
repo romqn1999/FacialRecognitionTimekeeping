@@ -6,13 +6,11 @@ using System.Threading.Tasks;
 
 namespace FacialRecognitionTimekeepingAPI.Models
 {
-    public class Face
+    public class IdentifyPersonRespone
     {
         [JsonPropertyName("faceId")]
         public string FaceId { get; set; }
-        [JsonPropertyName("persistedFaceId")]
-        public string PersistedFaceId { get; set; }
-        [JsonPropertyName("faceRectangle")]
-        public FaceRectangle FaceRectangle { get; set; }
+        [JsonPropertyName("candidates")]
+        public List<IdentifyCandidate> Candidates { get; set; }
     }
 }
